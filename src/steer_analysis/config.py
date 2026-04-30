@@ -10,9 +10,11 @@ from typing import List
 
 # ----- paths -----
 PROJECT_ROOT = Path(__file__).parent.resolve()
-DATA_GEN_DIR = PROJECT_ROOT.parent / "data_generation"   # where the persona JSONs live
-EXTRACTED_DIR = PROJECT_ROOT / "extracted"               # per-persona pooled activations land here
-ANALYSIS_DIR = PROJECT_ROOT / "analysis_out"             # plots + chosen-layer manifests land here
+PROJECT_ROOT = Path(__file__).parent.resolve()                          # src/steer_analysis/
+REPO_ROOT = PROJECT_ROOT.parent.parent                                  # steer/
+DATA_GEN_DIR = REPO_ROOT / "data_generation"
+EXTRACTED_DIR = REPO_ROOT / "extracted"            # or keep under PROJECT_ROOT — your call
+ANALYSIS_DIR = REPO_ROOT / "analysis_out"
 
 EXTRACTED_DIR.mkdir(exist_ok=True)
 ANALYSIS_DIR.mkdir(exist_ok=True)

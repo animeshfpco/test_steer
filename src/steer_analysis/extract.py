@@ -22,7 +22,7 @@ Schema of the saved file:
         "meta": {
             "persona": str,
             "model": str,
-            "rollout_indices": List[(condition, pair_idx, question_idx)],
+            "rollout_indices": {"pos": [(pair_idx, q_idx), ...], "neg": [...]},
             "rollouts_with_missing_ranges": List[...],   # rollouts where thinking/answer not found
         },
     }
@@ -175,7 +175,8 @@ def extract_for_persona(
         cond: {strat: [] for strat in config.POOLING_STRATEGIES}
         for cond in ("pos", "neg")
     }
-    rollout_indices: List[Tuple[str, int, int]] = []
+    # Per-condition so rollout_indices[cond][i] aligns with pooled_buffers[cond][strat][i].
+    rollout_indices: Dict[str, List[Tuple[int, int]]] = {"pos": [], "neg": []}
     skipped: List[Tuple[str, int, int, str]] = []
 
     for pair_idx, pair in enumerate(instructions):
@@ -209,7 +210,7 @@ def extract_for_persona(
                     else:
                         pooled_buffers[cond][strat].append(pooled[strat])
 
-                rollout_indices.append((cond, pair_idx, q_idx))
+                rollout_indices[cond].append((pair_idx, q_idx))
 
                 # Free GPU memory aggressively — the forward pass over the full
                 # sequence holds a lot of activations.

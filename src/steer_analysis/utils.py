@@ -141,17 +141,22 @@ def find_thinking_answer_ranges(
     # tokens — pooling over them is harmless dilution on a long thinking trace).
     # If no open in response, the prompt opened thinking and content starts at 0.
     if len(open_positions) > 0:
-        thinking_start = int(open_positions[0].item()) + 1
+        open_pos = int(open_positions[0].item())
+        thinking_start = open_pos + 1
     else:
+        open_pos = -1
         thinking_start = 0
 
-    # No close → thinking ran past max_new_tokens. Whole response is thinking,
-    # answer is missing.
-    if len(close_positions) == 0:
+    # Close must come AFTER the open we picked — otherwise we'd attach an
+    # orphan close to a later open and silently produce a bogus answer range.
+    valid_closes = close_positions[close_positions > open_pos]
+    if len(valid_closes) == 0:
+        # No close → thinking ran past max_new_tokens. Whole response is
+        # thinking, answer is missing.
         thinking = (thinking_start, response_length) if response_length > thinking_start else None
         return TokenRanges(prompt_length, response_length, thinking=thinking, answer=None)
 
-    thinking_end = int(close_positions[0].item())
+    thinking_end = int(valid_closes[0].item())
     thinking = (thinking_start, thinking_end) if thinking_end > thinking_start else None
 
     # Answer: from one past <channel|> to the first <turn|> after it (or end).

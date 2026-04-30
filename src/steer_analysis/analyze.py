@@ -148,10 +148,12 @@ def compute_within_layer_cosine(
     return (a * b).sum(dim=-1).cpu().numpy()
 
 
-def select_candidate_layers(aurocs: np.ndarray, k: int, skip_layer_zero: bool) -> List[int]:
-    """Top-k layers by AUROC. Layer 0 is the embedding output by our convention
-    in extract.py — usually skip it. AUROC is smoothed with a 3-point moving
-    average before ranking to avoid picking spiky neighbors of a flat plateau.
+def select_candidate_layers(aurocs: np.ndarray, k: int, skip_layer_zero: bool = True) -> List[int]:
+    """Top-k layers by AUROC. extract.py drops the embedding (hidden_states[1:]),
+    so layer 0 here is the first transformer block; `skip_layer_zero` excludes it
+    because the very first block is usually too close to token identity to give
+    a clean trait direction. AUROC is smoothed with a 3-point moving average
+    before ranking to avoid picking spiky neighbors of a flat plateau.
     """
     # 3-point moving average to dampen single-layer spikes; edges padded by replication.
     padded = np.concatenate([aurocs[:1], aurocs, aurocs[-1:]])
