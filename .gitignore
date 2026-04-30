@@ -11,5 +11,4 @@ wheels/
 .claude
 *.ipynb
 
-*.pt
 steer_vec/
