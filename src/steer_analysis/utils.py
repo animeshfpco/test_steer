@@ -88,10 +88,13 @@ def _resolve_control_token_ids(tokenizer) -> dict:
     """Resolve Gemma 4 control tokens to single integer IDs. Errors loudly if any
     one fails to round-trip — that's a sign of a tokenizer or model mismatch and
     everything downstream depends on these being correct."""
+    # AutoProcessor returns a processor that wraps the actual tokenizer; the
+    # token-id methods live on the inner tokenizer.
+    inner = getattr(tokenizer, "tokenizer", tokenizer)
     ids = {}
-    unk_id = getattr(tokenizer, "unk_token_id", None)
+    unk_id = getattr(inner, "unk_token_id", None)
     for name in (GEMMA4_THINKING_OPEN, GEMMA4_THINKING_CLOSE, GEMMA4_TURN_CLOSE):
-        tid = tokenizer.convert_tokens_to_ids(name)
+        tid = inner.convert_tokens_to_ids(name)
         if tid is None or (unk_id is not None and tid == unk_id):
             raise RuntimeError(
                 f"Gemma 4 control token {name!r} did not resolve to a known "

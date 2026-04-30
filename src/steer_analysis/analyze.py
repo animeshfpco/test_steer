@@ -93,40 +93,47 @@ def compute_per_layer_norms(diff: torch.Tensor) -> np.ndarray:
 def compute_per_layer_auroc(
     pos_stack: torch.Tensor,        # [N_pos, L, D] valid rollouts only
     neg_stack: torch.Tensor,        # [N_neg, L, D] valid rollouts only
-    diff: torch.Tensor,             # [L, D]
 ) -> np.ndarray:
-    """At each layer, project every rollout onto that layer's diff vector and
-    compute AUROC for separating pos from neg by projection score.
+    """Per-layer AUROC using leave-one-out projection.
 
-    Args:
-        pos_stack, neg_stack: per-rollout pooled activations
-        diff: per-layer diff vector
-
-    Returns:
-        np.ndarray of shape [L] with AUROC in [0, 1] per layer. ~0.5 = no separation.
-        Mean AUROC < 0.5 across layers would indicate the diff vector points the
-        wrong way — asserted at the bottom as a sanity check.
+    For each rollout, remove its contribution from its class's mean before
+    forming the diff direction, then project. AUROC over the stacked LOO scores
+    is unbiased — no longer guaranteed > 0.5 by construction, so falling near
+    or below 0.5 is now a meaningful signal that the layer doesn't carry the
+    trait rather than a sign of broken pipeline.
     """
     from sklearn.metrics import roc_auc_score
 
-    L = diff.shape[0]
+    N_pos, L, D = pos_stack.shape
+    N_neg = neg_stack.shape[0]
+    if N_pos < 2 or N_neg < 2:
+        raise ValueError("Need at least 2 rollouts per condition for LOO.")
+
+    pos_sum = pos_stack.sum(dim=0)             # [L, D]
+    neg_sum = neg_stack.sum(dim=0)             # [L, D]
+    pos_mean_full = pos_sum / N_pos
+    neg_mean_full = neg_sum / N_neg
+
+    # LOO means: each rollout subtracted from its own class's running sum.
+    pos_mean_loo = (pos_sum.unsqueeze(0) - pos_stack) / (N_pos - 1)   # [N_pos, L, D]
+    neg_mean_loo = (neg_sum.unsqueeze(0) - neg_stack) / (N_neg - 1)   # [N_neg, L, D]
+
+    # Diff directions paired with the sample they hold out.
+    diff_for_pos = pos_mean_loo - neg_mean_full.unsqueeze(0)          # [N_pos, L, D]
+    diff_for_neg = pos_mean_full.unsqueeze(0) - neg_mean_loo          # [N_neg, L, D]
+
+    pos_num = (pos_stack * diff_for_pos).sum(dim=-1)                  # [N_pos, L]
+    neg_num = (neg_stack * diff_for_neg).sum(dim=-1)                  # [N_neg, L]
+    pos_den = diff_for_pos.norm(dim=-1).clamp(min=1e-8)
+    neg_den = diff_for_neg.norm(dim=-1).clamp(min=1e-8)
+    pos_proj = (pos_num / pos_den).cpu().numpy()
+    neg_proj = (neg_num / neg_den).cpu().numpy()
+
+    labels = np.concatenate([np.ones(N_pos), np.zeros(N_neg)])
     auroc = np.zeros(L)
-
     for l in range(L):
-        denom = diff[l].norm().clamp(min=1e-8)
-        pos_proj = (pos_stack[:, l, :] @ diff[l]) / denom
-        neg_proj = (neg_stack[:, l, :] @ diff[l]) / denom
-
-        scores = torch.cat([pos_proj, neg_proj]).numpy()
-        labels = np.concatenate([
-            np.ones(pos_proj.shape[0]),
-            np.zeros(neg_proj.shape[0]),
-        ])
+        scores = np.concatenate([pos_proj[:, l], neg_proj[:, l]])
         auroc[l] = roc_auc_score(labels, scores)
-
-    assert auroc.mean() > 0.5, (
-        f"mean AUROC {auroc.mean():.3f} <= 0.5 — diff vector likely points the wrong way"
-    )
     return auroc
 
 
@@ -188,7 +195,7 @@ def analyze_persona(persona_name: str) -> Dict[str, LayerAnalysis]:
 
         diff = compute_diff_vectors(pos_stack, neg_stack)             # [L, D]
         norms = compute_per_layer_norms(diff)                         # [L]
-        aurocs = compute_per_layer_auroc(pos_stack, neg_stack, diff)  # [L]
+        aurocs = compute_per_layer_auroc(pos_stack, neg_stack)        # [L]
         candidates = select_candidate_layers(
             aurocs, k=config.ANALYSIS.n_candidates,
             skip_layer_zero=config.ANALYSIS.skip_layer_zero,
