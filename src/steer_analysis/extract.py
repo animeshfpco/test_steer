@@ -123,19 +123,9 @@ def pool_hidden_states(
     Each pooled tensor has shape [L, D] (one vector per layer).
 
     Returns a dict with keys 'thinking', 'answer', 'combined'. A value is None
-    if its range is missing (e.g. thinking didn't close cleanly).
-
-    TODO: implement the actual mean-pooling.
-        For each strategy:
-          - thinking: mean over hidden[:, prompt_length + thinking_start : prompt_length + thinking_end, :]
-                      along the seq dimension → [L, D]
-          - answer:   same idea using ranges.answer
-          - combined: mean over the union of both ranges, NOT mean of the two pooled
-                      vectors (that would weight them equally regardless of length).
-                      Concretely: build a list of (start, end) spans, slice and concat
-                      along seq dim, mean once over the result.
-        If the corresponding range is None, return None for that key.
-        Sanity check: pooled tensor has correct shape [L, D] and contains no NaNs.
+    if its range is missing (e.g. thinking didn't close cleanly). For 'combined',
+    pool over the concatenation of both ranges (not the average of the two pooled
+    vectors), so contributions are weighted by length.
     """
     out: Dict[str, Optional[torch.Tensor]] = {
         "thinking": None,

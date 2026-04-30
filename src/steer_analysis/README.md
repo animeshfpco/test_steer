@@ -27,16 +27,14 @@ analysis_out/
   ...
 ```
 
-## TODOs (in suggested order of implementation)
+## Implementation notes
 
-The scaffold has six `NotImplementedError` blocks, each marked with a `TODO:` and instructions inside the function. Suggested order:
-
-1. **`utils.find_thinking_answer_ranges`** — token-level detection of where the thinking section ends and the answer section begins. Most fiddly part, hardest to test in isolation. Verify by tokenizing a known thinking-mode response, printing the IDs, and checking your detected ranges decode back to the right strings.
-2. **`extract.pool_hidden_states`** — straightforward once ranges are correct. Mean-pool over each range; for `combined`, slice both ranges and mean over the union, not the average of the two pooled vectors.
-3. **`analyze.compute_diff_vectors`** — mean over rollouts (not over flattened tokens) per condition, then subtract. Two lines.
-4. **`analyze.compute_per_layer_auroc`** — projection scores per rollout per layer, then `roc_auc_score(labels, scores)`. The selection criterion. Anything else that drives layer choice (norm, cosine) is sanity-check material.
-5. **`analyze.select_candidate_layers`** — top-k by AUROC, skipping layer 0. Optionally smooth first.
-6. **`analyze.plot_persona`** — three panels. Cosmetic but informative; the AUROC plot is the headline result.
+- **`utils.find_thinking_answer_ranges`** — locates the response-relative ranges for the thinking and answer sections by scanning for Gemma-4 control tokens (`<|channel>`, `<channel|>`, `<turn|>`). Returns `None` for either section when it is missing or empty.
+- **`extract.pool_hidden_states`** — mean-pools hidden states over each range. `combined` is pooled over the concatenation of both ranges (not the average of the two pooled vectors), so contributions stay length-weighted.
+- **`analyze.compute_diff_vectors`** — per-layer `mean(pos) − mean(neg)` over the rollout dimension.
+- **`analyze.compute_per_layer_auroc`** — per-layer projection of every rollout onto the diff vector, then `sklearn.metrics.roc_auc_score`. Asserts mean AUROC > 0.5 across layers as a directional sanity check.
+- **`analyze.select_candidate_layers`** — 3-point moving-average smoothing of AUROC, then top-k descending. Layer 0 (embedding output) is masked when `skip_layer_zero` is set.
+- **`analyze.plot_persona`** — three panels: AUROC vs layer (with peak annotations and candidate markers, plus a `y=0.5` chance line), diff-vector norm vs layer, and within-layer cosine across the three pooling-strategy pairs.
 
 ## Smoke test order
 

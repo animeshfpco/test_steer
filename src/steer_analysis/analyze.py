@@ -64,12 +64,6 @@ def compute_diff_vectors(
 
     Mean over rollouts (not over flattened tokens) so that long rollouts don't
     dominate. This is the canonical Anthropic-style diff vector for the persona.
-
-    TODO: implement.
-        - Sanity-check both stacks have at least one valid rollout.
-        - Per-layer mean over the rollout (N) dimension for each.
-        - Subtract.
-        - Return [L, D] tensor.
     """
     valid_pos = filter_valid_rollouts(pos_stack)
     valid_neg = filter_valid_rollouts(neg_stack)
@@ -110,25 +104,30 @@ def compute_per_layer_auroc(
 
     Returns:
         np.ndarray of shape [L] with AUROC in [0, 1] per layer. ~0.5 = no separation.
-
-    TODO: implement.
-        For each layer l:
-          1. pos_proj = pos_stack[:, l, :] @ diff[l] / diff[l].norm()
-                        → [N_pos] scalar projection per pos rollout
-             neg_proj = neg_stack[:, l, :] @ diff[l] / diff[l].norm()
-                        → [N_neg]
-          2. AUROC of "is this rollout pos given the projection score":
-             - Concatenate scores, build labels (1 for pos, 0 for neg).
-             - Use sklearn.metrics.roc_auc_score(labels, scores), or compute
-               by hand with rank-sum (Mann-Whitney U / (N_pos * N_neg)).
-        Note: AUROC < 0.5 means projection is anti-correlated with the pos label,
-        which would indicate the diff vector points the wrong way. Should never
-        happen if diff is constructed as pos_mean - neg_mean, but worth a sanity
-        check (assert mean AUROC > 0.5 across layers).
+        Mean AUROC < 0.5 across layers would indicate the diff vector points the
+        wrong way — asserted at the bottom as a sanity check.
     """
-    
-    
-    raise NotImplementedError("Implement compute_per_layer_auroc.")
+    from sklearn.metrics import roc_auc_score
+
+    L = diff.shape[0]
+    auroc = np.zeros(L)
+
+    for l in range(L):
+        denom = diff[l].norm().clamp(min=1e-8)
+        pos_proj = (pos_stack[:, l, :] @ diff[l]) / denom
+        neg_proj = (neg_stack[:, l, :] @ diff[l]) / denom
+
+        scores = torch.cat([pos_proj, neg_proj]).numpy()
+        labels = np.concatenate([
+            np.ones(pos_proj.shape[0]),
+            np.zeros(neg_proj.shape[0]),
+        ])
+        auroc[l] = roc_auc_score(labels, scores)
+
+    assert auroc.mean() > 0.5, (
+        f"mean AUROC {auroc.mean():.3f} <= 0.5 — diff vector likely points the wrong way"
+    )
+    return auroc
 
 
 def compute_within_layer_cosine(
@@ -151,13 +150,20 @@ def compute_within_layer_cosine(
 
 def select_candidate_layers(aurocs: np.ndarray, k: int, skip_layer_zero: bool) -> List[int]:
     """Top-k layers by AUROC. Layer 0 is the embedding output by our convention
-    in extract.py — usually skip it.
-
-    TODO: optionally smooth aurocs first (e.g. 3-point moving average) before
-    picking top-k, to avoid choosing layers that are AUROC-spiky neighbors of
-    a flat plateau. Matters most when the curve is noisy.
+    in extract.py — usually skip it. AUROC is smoothed with a 3-point moving
+    average before ranking to avoid picking spiky neighbors of a flat plateau.
     """
-    raise NotImplementedError("Implement select_candidate_layers.")
+    # 3-point moving average to dampen single-layer spikes; edges padded by replication.
+    padded = np.concatenate([aurocs[:1], aurocs, aurocs[-1:]])
+    smoothed = (padded[:-2] + padded[1:-1] + padded[2:]) / 3.0
+
+    candidate_pool = smoothed.copy()
+    if skip_layer_zero:
+        candidate_pool[0] = -np.inf
+
+    # Top-k indices, ordered by AUROC descending.
+    top_k = np.argsort(candidate_pool)[::-1][:k]
+    return [int(i) for i in top_k]
 
 
 def analyze_persona(persona_name: str) -> Dict[str, LayerAnalysis]:
@@ -205,20 +211,75 @@ def plot_persona(
     results: Dict[str, LayerAnalysis],
     out_dir: Path,
 ) -> None:
-    """Three-panel plot per persona: AUROC vs layer, norm vs layer, cosine vs layer.
-
-    TODO: implement.
-        Panel 1 (AUROC): one line per strategy, x=layer, y=AUROC. Mark candidates.
-        Panel 2 (norm): one line per strategy, x=layer, y=‖diff‖.
-        Panel 3 (cosine within-layer): one line each for cos(thinking, answer),
-            cos(thinking, combined), cos(answer, combined). x=layer.
-
-        Style notes:
-          - Add a horizontal y=0.5 reference line on the AUROC panel.
-          - Annotate the layer where each strategy's AUROC peaks.
-          - Save as {out_dir}/{persona_name}.png at decent resolution.
+    """Three-panel plot per persona: AUROC vs layer, norm vs layer, and within-layer
+    cosine across pooling-strategy pairs. Saved as {out_dir}/{persona_name}.png.
     """
-    raise NotImplementedError("Implement plot_persona.")
+    if not results:
+        print(f"  no results to plot for {persona_name}")
+        return
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    colors = {"thinking": "tab:blue", "answer": "tab:orange", "combined": "tab:green"}
+
+    # Panel 1: AUROC vs layer
+    ax = axes[0]
+    for strategy, analysis in results.items():
+        layers = np.arange(analysis.aurocs.shape[0])
+        color = colors.get(strategy, None)
+        ax.plot(layers, analysis.aurocs, label=strategy, color=color)
+        peak = int(np.argmax(analysis.aurocs))
+        ax.scatter([peak], [analysis.aurocs[peak]], color=color, zorder=5)
+        ax.annotate(
+            f"L{peak}={analysis.aurocs[peak]:.2f}",
+            xy=(peak, analysis.aurocs[peak]),
+            xytext=(4, 4), textcoords="offset points", fontsize=8, color=color,
+        )
+        for cand in analysis.candidate_layers:
+            ax.axvline(cand, color=color, alpha=0.15, linestyle="--")
+    ax.axhline(0.5, color="gray", linestyle=":", label="chance")
+    ax.set_xlabel("layer")
+    ax.set_ylabel("AUROC")
+    ax.set_title(f"{persona_name}: per-layer AUROC")
+    ax.legend()
+    ax.grid(alpha=0.3)
+
+    # Panel 2: diff-vector norm vs layer
+    ax = axes[1]
+    for strategy, analysis in results.items():
+        layers = np.arange(analysis.norms.shape[0])
+        ax.plot(layers, analysis.norms, label=strategy, color=colors.get(strategy))
+    ax.set_xlabel("layer")
+    ax.set_ylabel("‖diff‖")
+    ax.set_title("diff-vector norm")
+    ax.legend()
+    ax.grid(alpha=0.3)
+
+    # Panel 3: within-layer cosine across pooling-strategy pairs
+    ax = axes[2]
+    pairs = [
+        ("thinking", "answer"),
+        ("thinking", "combined"),
+        ("answer", "combined"),
+    ]
+    for a, b in pairs:
+        if a in results and b in results:
+            cos = compute_within_layer_cosine(
+                results[a].diff_vectors, results[b].diff_vectors,
+            )
+            ax.plot(np.arange(cos.shape[0]), cos, label=f"cos({a}, {b})")
+    ax.axhline(0.0, color="gray", linestyle=":")
+    ax.set_xlabel("layer")
+    ax.set_ylabel("cosine")
+    ax.set_title("within-layer cosine across strategies")
+    ax.set_ylim(-1.05, 1.05)
+    ax.legend()
+    ax.grid(alpha=0.3)
+
+    fig.tight_layout()
+    out_path = out_dir / f"{persona_name}.png"
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  saved {out_path}")
 
 
 def save_diff_vectors_and_manifest(
