@@ -176,15 +176,17 @@ def find_thinking_answer_ranges(
 # tokens to single token IDs and to inspect the token layout of a fake rollout.
 # This is the cheap pre-flight check to run before kicking off extraction.
 if __name__ == "__main__":
-    import sys, config
+    import sys
+    import src.steer_analysis.config as config
     print(f"Loading tokenizer for {config.MODEL_NAME}...")
     tokenizer = AutoProcessor.from_pretrained(config.MODEL_NAME)
+    inner = getattr(tokenizer, "tokenizer", tokenizer)
 
     print("\nResolving control tokens:")
     try:
         ids = _resolve_control_token_ids(tokenizer)
         for name, tid in ids.items():
-            roundtrip = tokenizer.convert_ids_to_tokens([tid])
+            roundtrip = inner.convert_ids_to_tokens([tid])
             print(f"  {name!r:>14} -> id={tid}  (round-trip: {roundtrip})")
     except Exception as e:
         print(f"  FAILED: {e}")
@@ -194,14 +196,14 @@ if __name__ == "__main__":
     sample = tokenizer.apply_chat_template(
         [
             {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Hello."},
+            {"role": "user", "content": "Hello. what are you doint?"},
         ],
         tokenize=False, add_generation_prompt=True, enable_thinking=True,
     )
     print("---")
     print(sample)
     print("---")
-    sample_ids = tokenizer(sample, return_tensors="pt")["input_ids"][0]
+    sample_ids = tokenizer(text=sample, return_tensors="pt")["input_ids"][0]
     print(f"prompt token count: {sample_ids.shape[0]}")
     print(f"prompt contains <|channel> (thinking pre-opened by template): "
           f"{(sample_ids == ids[GEMMA4_THINKING_OPEN]).any().item()}")
